@@ -1,0 +1,15 @@
+# Build artifacts — never commit the xcframework. It is distributed via
+# GitHub Releases and consumed remotely by SPM's binaryTarget(url:checksum:).
+Frameworks/
+*.xcframework
+*.xcframework.zip
+
+# Xcode / SwiftPM
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store

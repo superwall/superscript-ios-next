@@ -1,0 +1,210 @@
+name: Release
+
+on:
+  # Triggered by the upstream Rust repo (superwall/superscript) when a new
+  # version of the CEL framework ships. Mirrors the original superscript-ios
+  # workflow's repository_dispatch contract so we can swap repos seamlessly.
+  repository_dispatch:
+    types: [update-build]
+
+  # Allow manual runs from the Actions tab for testing / one-off rebuilds.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 1.0.14). If omitted, read from rust/Cargo.toml."
+        required: false
+        type: string
+
+permissions:
+  contents: write   # push commits, create tags, create releases
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout iOS Repository
+        uses: actions/checkout@v4
+        with:
+          path: ios
+          # We need a real (non-shallow) checkout so the workflow can push
+          # commits and tags back. Default fetch-depth is 1.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout CEL Rust Repository
+        uses: actions/checkout@v4
+        with:
+          repository: superwall/superscript
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: rust
+
+      - name: Resolve Version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v=$(grep '^version =' rust/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          fi
+          if [ -z "$v" ]; then
+            echo "::error::Could not determine version"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $v"
+
+      - name: Skip if Tag Already Exists
+        working-directory: ios
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          if git rev-parse "refs/tags/$v" >/dev/null 2>&1; then
+            echo "Tag $v already exists, nothing to do."
+            echo "SKIP=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Cache Rust toolchain
+        if: env.SKIP != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo
+            ~/.rustup
+          key: ${{ runner.os }}-rust-toolchain-${{ hashFiles('rust/rust-toolchain*') }}
+
+      - name: Cache Cargo registry
+        if: env.SKIP != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('rust/Cargo.lock') }}
+
+      - name: Cache Cargo build
+        if: env.SKIP != 'true'
+        uses: actions/cache@v4
+        with:
+          path: rust/target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
+
+      - name: Install Rust
+        if: env.SKIP != 'true'
+        run: |
+          if [ ! -x "$(command -v rustup)" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
+          source $HOME/.cargo/env
+          rustup toolchain install nightly
+          rustup component add rust-src --toolchain nightly
+
+      - name: Build iOS Framework
+        if: env.SKIP != 'true'
+        working-directory: rust
+        run: |
+          chmod +x ./build_ios.sh
+          ./build_ios.sh
+
+      - name: Stage Swift Glue File
+        if: env.SKIP != 'true'
+        run: |
+          rm -f ios/Sources/Superscript/cel.swift
+          mv rust/target/ios/cel.swift ios/Sources/Superscript/
+
+      - name: Zip XCFramework & Compute Checksum
+        if: env.SKIP != 'true'
+        id: artifact
+        run: |
+          set -e
+          mkdir -p artifact
+          # Zip the .xcframework directory itself (not its contents) so SPM
+          # can locate `libcel.xcframework/Info.plist` after unzipping.
+          ditto -c -k --keepParent \
+            rust/target/xcframeworks/libcel.xcframework \
+            artifact/libcel.xcframework.zip
+
+          # Use SwiftPM's own checksum algorithm — must match what consumers
+          # compute or `swift package resolve` will reject the binary target.
+          checksum=$(swift package compute-checksum artifact/libcel.xcframework.zip)
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+          size=$(du -h artifact/libcel.xcframework.zip | cut -f1)
+          echo "Built libcel.xcframework.zip ($size, sha256/SPM=$checksum)"
+
+      - name: Rewrite Package.swift & Podspec
+        if: env.SKIP != 'true'
+        env:
+          V: ${{ steps.version.outputs.version }}
+          CHECKSUM: ${{ steps.artifact.outputs.checksum }}
+          URL: https://github.com/superwall/superscript-ios-next/releases/download/${{ steps.version.outputs.version }}/libcel.xcframework.zip
+        run: |
+          set -e
+
+          # Package.swift: the two `let libcel*` constants at the top.
+          python3 - <<'PY'
+          import re, os, pathlib
+          url = os.environ["URL"]
+          checksum = os.environ["CHECKSUM"]
+          p = pathlib.Path("ios/Package.swift")
+          src = p.read_text()
+          src = re.sub(r'let libcelReleaseURL = ".*"',
+                       f'let libcelReleaseURL = "{url}"', src)
+          src = re.sub(r'let libcelChecksum = ".*"',
+                       f'let libcelChecksum = "{checksum}"', src)
+          p.write_text(src)
+          PY
+
+          # Podspec: bump s.version. The download URL is derived from
+          # s.version in prepare_command, so no other edit is needed.
+          sed -i '' "s/s\.version          = \".*\"/s.version          = \"${V}\"/" ios/Superscript.podspec
+
+      - name: Commit & Push to main
+        if: env.SKIP != 'true'
+        working-directory: ios
+        run: |
+          set -e
+          v="${{ steps.version.outputs.version }}"
+
+          git config user.name  "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          # Pull anything that landed on main while we were building.
+          git fetch origin main --tags
+          git pull --rebase --autostash origin main
+
+          git add Package.swift Superscript.podspec Sources/Superscript/cel.swift
+          # If nothing changed (e.g. swift glue identical to last release),
+          # still record an empty commit so the tag has a release commit.
+          git commit -m "Release ${v}" || git commit --allow-empty -m "Release ${v}"
+
+          # Re-rebase in case main moved during commit.
+          git pull --rebase --autostash origin main
+          git push origin main
+
+      - name: Create GitHub Release & Upload Asset
+        if: env.SKIP != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ios
+        run: |
+          # Run AFTER the commit+push above so the tag the release creates
+          # points at the commit whose Package.swift references it. This is
+          # the commit consumers will resolve when they pin to this tag.
+          v="${{ steps.version.outputs.version }}"
+          gh release create "$v" \
+            --title "$v" \
+            --notes "Automated release. See [the upstream Rust release](https://github.com/superwall/superscript/releases/tag/$v) for changes." \
+            --target main \
+            "../artifact/libcel.xcframework.zip"
+
+      - name: Publish to CocoaPods Trunk
+        if: env.SKIP != 'true'
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+        working-directory: ios
+        run: |
+          # `pod trunk push` runs prepare_command, which fetches the asset we
+          # just uploaded — so this step must come AFTER the GitHub release.
+          pod trunk push Superscript.podspec --allow-warnings
