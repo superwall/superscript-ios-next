@@ -22,6 +22,12 @@ jobs:
   release:
     runs-on: macos-latest
 
+    # Expose the pod-trunk token at job level so step-level `if:` can
+    # gate on whether it's configured. (The `secrets` context isn't
+    # readable directly from `if:` expressions.)
+    env:
+      COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+
     steps:
       - name: Checkout iOS Repository
         uses: actions/checkout@v4
@@ -200,9 +206,11 @@ jobs:
             "../artifact/libcel.xcframework.zip"
 
       - name: Publish to CocoaPods Trunk
-        if: env.SKIP != 'true'
-        env:
-          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+        # Skipped automatically when the COCOAPODS_TRUNK_TOKEN secret is
+        # missing, so the workflow can validate SPM publishing end-to-end
+        # before the secret is configured. Add the secret with:
+        #   gh secret set COCOAPODS_TRUNK_TOKEN -R superwall/superscript-ios-next
+        if: env.SKIP != 'true' && env.COCOAPODS_TRUNK_TOKEN != ''
         working-directory: ios
         run: |
           # `pod trunk push` runs prepare_command, which fetches the asset we
