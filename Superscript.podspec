@@ -34,6 +34,7 @@ Pod::Spec.new do |s|
   # in the repo. The xcframework is downloaded as a release asset.
   s.source       = { :git => "https://github.com/superwall/superscript-ios-next.git", :tag => "#{s.version}" }
   s.ios.deployment_target = "13.0"
+  s.osx.deployment_target = "12.0"
   s.swift_versions = ["5.5"]
 
   s.source_files = "Sources/**/*.{swift}"
