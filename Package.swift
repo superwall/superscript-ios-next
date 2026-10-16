@@ -1,4 +1,4 @@
-// swift-tools-version: 5.5
+// swift-tools-version: 6.2
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -15,9 +15,9 @@ let libcelChecksum = "71a4ac06d61c69a973bd3f5df0c771dd97a8e92e4135ee534e091a40f0
 let package = Package(
   name: "Superscript",
   platforms: [
-    .iOS(.v13),
-    .macOS(.v10_12),
-    .watchOS("6.2")
+    .iOS(.v15),
+    .macOS(.v12),
+    .watchOS(.v8)
   ],
   products: [
     .library(
@@ -41,5 +41,7 @@ let package = Package(
       name: "SuperscriptTests",
       dependencies: ["Superscript"]
     )
-  ]
+  ],
+  // The generated bindings in cel.swift are written for Swift 5.
+  swiftLanguageModes: [.v5]
 )
