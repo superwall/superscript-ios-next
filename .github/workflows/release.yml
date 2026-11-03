@@ -99,12 +99,16 @@ jobs:
       - name: Install Rust
         if: env.SKIP != 'true'
         run: |
-          if [ ! -x "$(command -v rustup)" ]; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          # Use a rustup in ~/.cargo even when the runner image ships its own
+          # elsewhere, so the cache paths above and the PATH below match.
+          if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
           fi
-          source $HOME/.cargo/env
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install nightly
           rustup component add rust-src --toolchain nightly
+          cargo +nightly --version
 
       - name: Build iOS Framework
         if: env.SKIP != 'true'
