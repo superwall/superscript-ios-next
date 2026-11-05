@@ -9,8 +9,8 @@ import PackageDescription
 // a new version of the underlying Rust framework is released. Do not edit by
 // hand unless you know what you're doing — keep both in sync with the asset
 // uploaded to the matching GitHub Release.
-let libcelReleaseURL = "https://github.com/superwall/superscript-ios-next/releases/download/1.0.17/libcel.xcframework.zip"
-let libcelChecksum = "65879c14c4f1f4ff3fd6e5393ab843e0a221e98ce3d58739331c447b7f351dbb"
+let libcelReleaseURL = "https://github.com/superwall/superscript-ios-next/releases/download/1.0.18/libcel.xcframework.zip"
+let libcelChecksum = "d3aa4d26a24d41c33af0a8ee27115c90457308b39fbe995cc42d2a7eab7afd11"
 
 let package = Package(
   name: "Superscript",
