@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 1.0.14). If omitted, read from rust/Cargo.toml."
+        description: "Version to release (e.g. 1.0.14). If omitted, read from rust/Cargo.toml. If it's already tagged, only pushes it to CocoaPods trunk if it isn't there."
         required: false
         type: string
 
@@ -68,6 +68,28 @@ jobs:
             echo "Tag $v already exists, nothing to do."
             echo "SKIP=true" >> "$GITHUB_ENV"
           fi
+
+      # A tagged version whose trunk push failed (trunk was read-only for a
+      # week, which is how 1.0.17 and 1.0.18 missed it) can't go through the
+      # steps below again. A manual run pushes that tag's podspec as it is.
+      - name: Publish an Already Tagged Version to CocoaPods Trunk
+        if: env.SKIP == 'true' && github.event_name == 'workflow_dispatch'
+        working-directory: ios
+        env:
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          set -e
+          if curl -fsS "https://trunk.cocoapods.org/api/v1/pods/Superscript" |
+              python3 -c 'import json, sys; sys.exit(0 if sys.argv[1] in [v["name"] for v in json.load(sys.stdin)["versions"]] else 1)' "$V"; then
+            echo "$V is already on CocoaPods trunk."
+            exit 0
+          fi
+          if [ -z "$COCOAPODS_TRUNK_TOKEN" ]; then
+            echo "::error::$V isn't on CocoaPods trunk, and COCOAPODS_TRUNK_TOKEN isn't set."
+            exit 1
+          fi
+          git checkout --quiet "refs/tags/$V"
+          pod trunk push Superscript.podspec --allow-warnings
 
       - name: Cache Rust toolchain
         if: env.SKIP != 'true'
